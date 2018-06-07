@@ -27,6 +27,8 @@ class JiraTicket(ticket.Ticket):
             self.auth = 'kerberos'
             self.auth_url = '{0}/step-auth-gss'.format(self.url)
 
+        self.ticket_content = None
+
         # Call our parent class's init method which creates our requests session.
         super(JiraTicket, self).__init__(project, ticket_id)
 
@@ -77,19 +79,40 @@ class JiraTicket(ticket.Ticket):
         :param ticket_id: The ticket you're verifying.
         :return: True or False depending on if ticket is valid.
         """
+        result = self.get_ticket_content(ticket_id)
+        if result.status == 'Failure':
+            logger.error("Ticket {0} is not valid".format(ticket_id))
+            return False
+        logger.debug("Ticket {0} is valid".format(ticket_id))
+        self.ticket_content = result.ticket_content
+        return True
+
+    def get_ticket_content(self, ticket_id=None):
+        """
+        Get ticket content.
+
+        :param ticket_id: Id of a ticket, if none specified self.ticket_id is used.
+        :return: self.request_result: Named tuple containing request status, error_message, and url info.
+        """
+        if ticket_id is None:
+            if not self.ticket_id:
+                error_message = "No ticket ID associated with ticket object. " \
+                                "Set ticket ID with set_ticket_id(<ticket_id>)"
+                logger.error(error_message)
+                return self.request_result._replace(status='Failure', error_message=error_message)
+            ticket_id = self.ticket_id
+
         try:
             r = self.s.get("{0}/{1}".format(self.rest_url, ticket_id))
             logger.debug("Verify ticket_id: status code: {0}".format(r.status_code))
             r.raise_for_status()
             logger.debug("Ticket {0} is valid".format(ticket_id))
-            return True
+            return self.request_result._replace(ticket_content=r.json()['fields'])
         except requests.RequestException as e:
-            if r.json()['errorMessages'][0] == "Issue Does Not Exist":
-                logger.error("Ticket {0} is not valid".format(ticket_id))
-            else:
-                logger.error("Unexpected error occurred when verifying ticket_id")
-                logger.error(e)
-            return False
+            error_message = "Error getting ticket content"
+            logger.error(error_message)
+            logger.error(e)
+            return self.request_result._replace(status='Failure', error_message=error_message)
 
     def create(self, summary, description, **kwargs):
         """
@@ -174,8 +197,9 @@ class JiraTicket(ticket.Ticket):
         ticket_content = r.json()
         self.ticket_id = ticket_content['key']
         self.ticket_url = self._generate_ticket_url()
+        self.ticket_content = ticket_content['fields']
         logger.info("Created ticket {0} - {1}".format(self.ticket_id, self.ticket_url))
-        return self.request_result
+        return self.request_result._replace(ticket_content=ticket_content['fields'])
 
     def edit(self, **kwargs):
         """
